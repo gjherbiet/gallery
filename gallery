@@ -1,0 +1,402 @@
+#!/bin/bash
+##############################################################################
+# File   : gallery.sh
+# Author : Guillaume-Jean Herbiet  <guillaume-jean@herbiet.net>
+#
+#
+# Copyright (c) 2011 Guillaume-Jean Herbiet     (http://herbiet.net)
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# 
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Guillaume-Jean Herbiet
+# <guillaume-jean@herbiet.net>
+#
+##############################################################################
+
+VERSION="0.1"
+function version {
+	echo "This is $(basename $0) v. $VERSION"
+	echo "Copyright (c) 2011 Guillaume-Jean Herbiet  (http://herbiet.net)"
+	echo "This is free software; see the source for copying conditions. There is NO"
+	echo "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE."
+}
+
+function ohai {
+	echo -e "\e[1;34m==> \e[0m"$@
+}
+
+function oops {
+	echo -e "\e[0;33m/!\ \e[0m"$@
+}
+
+function onoe {
+	echo -e "\e[1;31m!!! \e[0m"$@
+}
+
+function create_dir {
+	[ -d "$1" ] || (mkdir -p "$1" && ( [ ! $DEBUG ] || echo "Created directory $1")) || \
+		(onoe "Error in creating directory '$1': $!" && exit 3)
+}
+
+function resize_picture {
+	WIDTH=`identify -format %w "$1"`
+	HEIGHT=`identify -format %h "$1"`
+	[ $DEBUG ] && echo "  Picture is $WIDTH x $HEIGHT"
+	
+	OUTPUT_FILE=$2/`basename $1`
+	NEW_WIDTH=
+	NEW_HEIGHT=
+	
+	if [ $WIDTH -gt $HEIGHT ]; then
+		if [ $WIDTH -gt $3 ]; then
+			[ $DEBUG ] && echo "  Picture will be resized based on WIDTH"
+			NEW_WIDTH=$3
+			NEW_HEIGHT=$(echo "$HEIGHT * $3 / $WIDTH" | $BC_CMD)
+		else
+			[ $DEBUG ] && echo "  Picture does not need resizing"
+		fi
+	else
+		if [ $HEIGHT -gt $3 ]; then
+			[ $DEBUG ] && echo "  Picture will be resized based on HEIGHT"
+			NEW_WIDTH=$(echo "$WIDTH * $3 / $HEIGHT" | $BC_CMD)
+			NEW_HEIGHT=$3
+		else
+			[ $DEBUG ] && echo "  Picture does not need resizing"
+		fi
+	fi
+	
+	if [[ $NEW_WIDTH && $NEW_HEIGHT ]]; then
+		[ $DEBUG ] && echo "  Picture will be resized to $NEW_WIDTH x $NEW_HEIGHT"
+		$CONVERT_CMD -resize "$NEW_WIDTH"x"$NEW_HEIGHT" "$1" "$OUTPUT_FILE" ||
+			oops "Error in resizing $1: $!"
+	fi
+}
+
+function generate_page {
+	[ $DEBUG ] && echo "  Generating page 'p$COUNT.html'"
+	
+	cat<<EOF > "$INPUT/$OUTPUT/p$COUNT.html"
+<html>
+	<head>
+		<title>$TITLE - $1</title>
+		<link rel="stylesheet" type="text/css" href="style.css" media="screen" />
+	</head>
+	<body>
+		<h1>$1</h1>
+EOF
+
+NAV_STRING=
+if [ $COUNT -gt 0 ]; then
+	PREVIOUS=`expr $COUNT - 1`
+	NAV_STRING="<a href=\"p$PREVIOUS.html\">&lt;&lt;&lt;</a> | "
+else
+	NAV_STRING="&lt;&lt;&lt; | "
+fi
+PAGE=
+if [ `expr $COUNT / $PAGINATION` -gt 0 ]; then
+	PAGE=`expr $COUNT / $PAGINATION`
+fi
+NAV_STRING="$NAV_STRING""<a href=\"index$PAGE.html\">index</a>"
+if [ $COUNT -lt $TOTAL ]; then
+	NEXT=`expr $COUNT + 1`
+	NAV_STRING="$NAV_STRING | <a href=\"p$NEXT.html\">&gt;&gt;&gt;</a>"
+else
+	NAV_STRING="$NAV_STRING | &gt;&gt;&gt;"
+fi
+
+cat<<EOF >> "$INPUT/$OUTPUT/p$COUNT.html"
+		<h3>$NAV_STRING</h3>
+		<img src="pictures/$1" alt="$1" />
+	</body>
+</html>
+EOF
+}
+
+function generate_index {
+	INDEX=
+	if [ $1 -gt 0 ]; then
+		INDEX=$1
+	fi
+	[ $DEBUG ] && echo "Generating index file 'index$INDEX.html'"
+
+cat <<EOF > "$INPUT/$OUTPUT/index$INDEX.html"
+<html>
+	<head>
+		<title>$TITLE</title>
+		<link rel="stylesheet" type="text/css" href="style.css" media="screen" />
+	</head>
+	<body>
+		<h1>$TITLE</h1>
+EOF
+
+NAV_STRING="<a href=\"index.html\">Page 1</a>"
+INDEX_PAGES=`expr $TOTAL / $PAGINATION`
+IND=1
+while [ $IND -lt $INDEX_PAGES ]; do
+	IND=`expr $IND + 1`
+	NAV_STRING="$NAV_STRING | <a href=\"index$IND.html\">Page $IND</a>"
+done
+
+cat <<EOF >> "$INPUT/$OUTPUT/index$INDEX.html"
+		<h3>$NAV_STRING</h3>
+		<table>
+EOF
+}
+
+function finalize_index {
+	INDEX=
+	if [ $1 -gt 0 ]; then
+		INDEX=$1
+	fi
+	[ $DEBUG ] && echo "Finalizing index file 'index$INDEX.html'"
+	
+cat <<EOF >> "$INPUT/$OUTPUT/index$INDEX.html"
+		</table>
+	</body>
+</html>
+EOF
+}
+
+function add_to_index {
+	INDEX=
+	if [ `expr $COUNT / $PAGINATION` -gt 0 ]; then
+		INDEX=`expr $COUNT / $PAGINATION`
+	fi
+
+	if [ `expr $COUNT % $COLUMNS` -eq 0 ]; then
+		echo "			<tr>" >> "$INPUT/$OUTPUT/index$INDEX.html"
+	fi
+
+cat <<EOF >> "$INPUT/$OUTPUT/index$INDEX.html"
+				<td>
+					<a href="p$COUNT.html" alt="$1">
+						<img src="thumbnails/$1" alt="$1">
+					</a>
+				</td>
+EOF
+
+	if [ `expr $COUNT % $COLUMNS` -eq `expr $COLUMNS - 1` ]; then
+		echo "			</tr>" >> "$INPUT/$OUTPUT/index$INDEX.html"
+	fi
+}
+
+function generate_stylesheet {
+if [ ! $LIGHT_THEME ]; then
+cat <<EOF > "$INPUT/$OUTPUT/style.css"
+body {
+	background: #000000;
+	color: #eeeeec;
+}
+
+a {
+	color: #729fcf
+}
+
+a:hover {
+	color: #8ae234
+}
+
+a:visited {
+	color: #ad7fa8
+}
+EOF
+fi
+
+cat <<EOF >> "$INPUT/$OUTPUT/style.css"
+table {
+	width: 100%;
+}
+
+td {
+	margin: 5px;
+	padding: 5px;
+}
+
+img {
+	display: block;
+	margin-left: auto;
+	margin-right: auto
+}
+
+EOF
+}
+
+#
+# Check that required elements are in the path
+#
+GETOPTS_CMD=$(which getopts)
+GREP_CMD=$(which grep)
+BC_CMD=$(which bc)
+CONVERT_CMD=$(which convert)
+IDENTIFY_CMD=$(which identify)
+if [[ ! $GETOPTS_CMD || ! $GREP_CMD || ! $BC_CMD || ! $CONVERT_CMD || ! $IDENTIFY_CMD ]]; then
+	onoe "This program requires 'getopts', 'grep', 'bc',"
+	onoe "'convert' and 'identify' utilities to be in your path."
+	onoe "'convert' and 'identify' can be obtained by installing ImageMagick."
+	exit 1
+fi
+
+#
+# Setup the required tools
+#
+#GETOPT_VERSION=$($GETOPT_CMD -V | $GREP_CMD "enhanced")
+
+#
+# Parse optional flags
+#
+VERBOSE=
+DEBUG=
+
+INPUT=$(pwd)
+TITLE=
+OUTPUT="gallery"
+PAGINATION=30
+COLUMNS=3
+THUMBNAILS_MAX_SIZE=200
+PICTURES_MAX_SIZE=800
+LIGHT_THEME=
+
+function usage {
+	cat<<EOF
+$(basename $0) [-h] [-V] [-d] [-v]
+    [-t <Gallery title>] [-o <output_dir>]
+    [-p <PAGINATE_NUMBER>] [-c <COLUMNS_NUMBER>] [-l]
+    [-s <THUMBNAILS_MAX_SIZE>] [-S <PICTURES_MAX_SIZE>]
+    [<pictures_dir>]
+
+  Generates a static HTML gallery of photos based on the JPG files contained
+  in the given directory.
+
+  Note: If your system has the non-enhanced version of 'getopt' (which is the
+  case by default on BSD systems, including Mac OS), only the short version
+  of the following options are available.
+
+     -h          : Print this help, then exit.
+     -V          : Print the software version, then exit.
+     -d          : Extended information about the script function.
+     -v          : Display a summary of the executed operations.
+
+     -t          : Galery title. Defaults to the name of the inut directory.
+     -o          : Name of the ouput direcory, created under the current
+                   working directory. Defaults to a path-safe version of
+                   the gallery title or to "gallery" if no title is specified.
+
+    -p           : Paginate the gallery index by displaying a maximum of
+                   PAGINATE_NUMBER pictures per index page.
+                   Defaults to 30 pictures per page.
+    -c           : Display COLUMNS_NUMBER columns of pictures in the index file.
+                   Defaults to 3 pictures per row.
+    -l           : Use a light theme instead of the default dark theme.
+
+    -s           : Set the longest dimension of thumbnails to THUMBNAILS_MAX_SIZE.
+                   Default is 200px.
+    -S           : Set the longest dimension of pcitures to PICTURES_MAX_SIZE
+                   Default is 800px.
+
+   pictures_dir  : The directory containing the JPG files that will be
+                   used in the gallery generation. Defaults to the current
+                   working directory.
+
+EOF
+}
+
+#
+# Process the command-line arguments
+#
+while getopts "hVdvt:o:p:c:ls:S:" FLAG; do
+	case "$FLAG"
+		in
+			h)	usage; exit 0;;
+			d)	echo "Debug mode ON"; DEBUG=1; VERBOSE=1;;
+			v)	if [ ! $VERBOSE ]; then
+					echo "Verbose mode ON"
+					VERBOSE=1
+				fi
+				;;
+			V)	version; exit 0;;
+			t)	TITLE=$OPTARG;;
+			o)	OUTPUT=$OPTARG;;
+			p)	PAGINATION=$OPTARG;;
+			c) 	COLUMNS=$OPTARG;;
+			l)	LIGHT_THEME=1;;
+			s)	THUMBNAILS_MAX_SIZE=$OPTARG;;
+			S)	PICTURES_MAX_SIZE=$OPTARG;;
+			*)	onoe "Internal error!"; exit 2;;	
+		esac
+done
+shift `expr $OPTIND - 1`
+if [ $1 ]; then
+	INPUT=$1
+fi
+if [ "$TITLE" == "" ]; then
+	TITLE=$(basename $INPUT)
+fi
+
+#
+# Display some messages if needed
+#
+if [ $DEBUG ]; then
+	ohai "Gallery generation configuration:"
+	echo "Input dir : $INPUT"
+	echo "Title     : $TITLE"
+	echo "Ouput dir : $OUTPUT"
+	echo "Pagination: $PAGINATION"
+	echo "Columns   : $COLUMNS"
+	echo "Thumbnails: $THUMBNAILS_MAX_SIZE"
+	echo "Pictures: : $PICTURES_MAX_SIZE"
+fi
+
+if [ $VERBOSE ]; then
+	ohai "Generating gallery from $INPUT"
+fi
+
+#
+# Create the destination directories
+#
+create_dir "$INPUT/$OUTPUT"
+create_dir "$INPUT/$OUTPUT/thumbnails"
+create_dir "$INPUT/$OUTPUT/pictures"
+
+#
+# Generate the stylesheet file
+#
+generate_stylesheet
+
+#
+# Create thumbnails, picutres and dedicated pages
+#
+COUNT=0
+TOTAL=$(expr `ls "$INPUT"/*.[jJ][pP][gG] | wc -l` - 1)
+if [ $PAGINATION -lt 1 ]; then
+	PAGINATION=$TOTAL
+fi
+ls "$INPUT"/*.[jJ][pP][gG] | while read FILE; do
+	
+	if [ `expr $COUNT % $PAGINATION` -eq 0 ]; then
+		generate_index `expr $COUNT / $PAGINATION`
+	fi
+	
+	[ $VERBOSE ] && echo "Exporting $FILE"
+	resize_picture "$FILE" "$INPUT/$OUTPUT/thumbnails" $THUMBNAILS_MAX_SIZE
+	resize_picture "$FILE" "$INPUT/$OUTPUT/pictures" $PICTURES_MAX_SIZE
+	generate_page "`basename $FILE`"
+	add_to_index "`basename $FILE`"
+	
+	if [[ `expr $COUNT % $PAGINATION` -eq `expr $PAGINATION - 1` ||
+		  $COUNT -eq $TOTAL ]]; then
+		finalize_index `expr $COUNT / $PAGINATION`
+	fi
+	
+	COUNT=`expr $COUNT + 1`
+done
